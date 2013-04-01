@@ -104,10 +104,19 @@ class BadGuy extends Entity
   constructor: ->
     super
     @hp = 1
+    @target = null  # Set with a setter
 
   draw: (ctx, percent) ->
     ctx.fillStyle = 'green'
     ctx.fillRect @x, @y, @width, @height
+
+  tick: ->
+    return unless @target
+    if @target.y > @y
+      @y += 1
+    else if @target.y < @y
+      @y -= 1
+    @x--
 
   hitByBullet: (bullet) -> @hp = 0
   alive: -> @hp > 0
@@ -165,9 +174,33 @@ class Player extends Entity
     ctx.fillStyle = 'red'
     ctx.fillRect p.x, p.y, @width, @height
 
-entities.add new BadGuy WIDTH - 10, (HEIGHT - 10) / 2, 10, 10
-entities.add new BadGuy WIDTH - 30, (HEIGHT - 10) / 2, 10, 10
-entities.add new Player 20, (HEIGHT - 10) / 2, 10, 10
+class LoopingTimer
+  constructor: (@duration) ->
+    @left = @duration
+
+  tick: ->
+    @left-- if @left > 0
+    if @left == 0
+      @left = @duration
+      return true
+    false
+
+# Calls |fn| every |ticks| ticks.
+class Generator extends Entity
+  constructor: (@ticks, @fn) ->
+    super 0, 0, 0, 0
+    @timer = new LoopingTimer @ticks
+
+  tick: ->
+    if @timer.tick()
+      @fn()
+
+player = new Player 20, (HEIGHT - 10) / 2, 10, 10
+entities.add player
+entities.add new Generator 60, ->
+  bg = new BadGuy WIDTH, randInt(HEIGHT - 10), 10, 10
+  bg.target = player
+  entities.add bg
 
 class Particles
   constructor: ->
