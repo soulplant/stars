@@ -19,8 +19,21 @@ class Point
   constructor: (@x, @y) ->
 
   scale: (x, y=x) -> new Point @x * x, @y * y
+  sub: (pt) -> new Point @x - pt.x, @y - pt.y
+
+  magnitude: -> Math.sqrt(@x * @x + @y * @y)
+
+  distance: (pt) -> @sub(pt).magnitude()
+
+  toUnit: ->
+    h = @magnitude()
+    return new Point(0, 0) if h == 0
+    new Point(@x/h, @y/h).offset()
+
+  isEmpty: -> @x == 0 && @y == 0
+
   offset: ->
-    h = Math.sqrt(@x*@x + @y*@y)
+    h = @magnitude()
     if h == 0
       return new Point 0, 0
     new Point Math.abs(@x) * @x/h, Math.abs(@y) * @y/h
@@ -78,6 +91,10 @@ class Entities
 class Entity
   constructor: (@x, @y, @width, @height) ->
   draw: (ctx, percent) ->
+    p = @getDrawingPos percent
+    ctx.fillStyle = @color
+    ctx.fillRect p.x, p.y, @width, @height
+
   getDrawingPos: (percent) ->
     return new Point @x, @y unless @lastPos
     x = @x * percent + @lastPos.x * (1 - percent)
@@ -100,27 +117,64 @@ class Entity
     return (x2 <= x1 <= x2e) || (x2 <= x1e <= x2e) ||
         (x1 <= x2 <= x1e) || (x1 <= x2e <= x1e)
 
+class FreefallScript
+  constructor: (@badGuy) ->
+  nextDelta: -> new Point -1, 0
+  alive: -> true
+
+class GoToScript
+  constructor: (@badGuy, @goToPt) ->
+  nextDelta: ->
+    speed = 2
+    badGuyPt = new Point @badGuy.x, @badGuy.y
+    direction = @goToPt.sub badGuyPt
+    if direction.magnitude() < speed
+      return direction
+    direction.toUnit().scale(speed)
+
+  alive: ->
+    pt = new Point @badGuy.x, @badGuy.y
+    pt = @goToPt.sub pt
+    !pt.isEmpty()
+
+class CrashingBadGuy extends Entity
+  constructor: (x, y) ->
+    super x, y, 10, 10
+    @color = 'red'
+
+  alive: -> @y <= HEIGHT
+
+  tick: ->
+    @x--
+    @y++
+
 class BadGuy extends Entity
   constructor: ->
     super
     @hp = 1
     @target = null  # Set with a setter
-
-  draw: (ctx, percent) ->
-    ctx.fillStyle = 'green'
-    ctx.fillRect @x, @y, @width, @height
+    @scripts = [new FreefallScript this]
+    @color = 'green'
 
   tick: ->
+    super
     return unless @target
-    if @target.y > @y
-      @y += 1
-    else if @target.y < @y
-      @y -= 1
-    @x--
+    if @scripts.length == 0
+      @x--
+    else
+      delta = @scripts[0].nextDelta()
+      @scripts.shift() if !@scripts[0].alive()
+      @x += delta.x
+      @y += delta.y
 
-  hitByBullet: (bullet) -> @hp = 0
+  addScript: (script) ->
+    @scripts.unshift script
+
+  hitByBullet: (bullet) ->
+    return unless @alive()
+    @hp = 0
+    entities.add new CrashingBadGuy @x, @y
   alive: -> @hp > 0
-
 
 class Shooter
   constructor: (@cooldown) -> @left = 0
@@ -137,6 +191,7 @@ class Bullet extends Entity
   constructor: (x, y, @dx, @dy) ->
     super x, y, 2, 2
     @hit = false
+    @color = 'red'
 
   tick: ->
     super
@@ -149,30 +204,21 @@ class Bullet extends Entity
 
   alive: -> @x < WIDTH && !@hit
 
-  draw: (ctx, percent) ->
-    p = @getDrawingPos percent
-    ctx.fillStyle = 'red'
-    ctx.fillRect p.x, p.y, @width, @height
-
 class Player extends Entity
   constructor: ->
     super
     @shooter = new Shooter 10
+    @color = 'red'
 
   tick: ->
     super()
     @shooter.tick()
-    delta = controller.offset().scale(2).offset()
+    delta = controller.offset().toUnit().scale(2)
     @x += delta.x
     @y += delta.y
     if controller.shoot()
       if @shooter.shoot()
-        entities.add new Bullet @x, @y + @height / 2 - 1, 4, 0
-
-  draw: (ctx, percent) ->
-    p = @getDrawingPos percent
-    ctx.fillStyle = 'red'
-    ctx.fillRect p.x, p.y, @width, @height
+        entities.add new Bullet @x + @width, @y + @height / 2 - 1, 4, 0
 
 class LoopingTimer
   constructor: (@duration) ->
@@ -200,6 +246,9 @@ entities.add player
 entities.add new Generator 60, ->
   bg = new BadGuy WIDTH, randInt(HEIGHT - 10), 10, 10
   bg.target = player
+  bg.addScript new GoToScript bg, new Point(WIDTH - 50, HEIGHT / 2)
+  bg.addScript new GoToScript bg, new Point(WIDTH - 50, HEIGHT / 2 - 30)
+  bg.addScript new GoToScript bg, new Point(WIDTH - 80, HEIGHT / 2 + 30)
   entities.add bg
 
 class Particles
@@ -239,15 +288,17 @@ randArray = (arr) -> arr[randInt(arr.length)]
 
 colors = ['red', 'green', 'blue']
 
-generateParticle = ->
+generateParticle = (x, speed=1, color='#ddd') ->
   y = randInt HEIGHT
   size = 1
-  speed = 2
-  new Particle x, y, '#ddd', speed, size
+  new Particle x, y, color, speed, size
 
 ps = new Particles()
 for x in [0..WIDTH]
-  ps.add generateParticle()
+  ps.add generateParticle(x, 2)
+
+for x in [0..Math.floor(WIDTH/2)]
+  ps.add generateParticle(x * 2, 3, '#aaa')
 
 now = -> new Date().getTime()
 lastTick = now()
@@ -258,7 +309,9 @@ FPT = Math.floor 1000/TPS     # frames per tick
 draw = ->
   timeNow = now()
   delta = timeNow - lastTick
-  while timeNow - lastTick > FPT
+  if timeNow - lastTick > 1000
+    lastTick = timeNow - FPT
+  while timeNow - lastTick >= FPT
     entities.tick()
     lastTick += FPT
   requestAnimationFrame draw
@@ -269,8 +322,9 @@ draw = ->
   entities.draw ctx, (timeNow - lastTick) / FPT
 
   y = randInt HEIGHT
-  ps.add generateParticle()
+  ps.add generateParticle(WIDTH, 2)
+  ps.add generateParticle(WIDTH, 3, '#aaa')
   if ps.size() < WIDTH
-    ps.add generateParticle()
+    ps.add generateParticle(WIDTH, 2)
 
 draw()
