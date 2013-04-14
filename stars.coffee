@@ -1,5 +1,7 @@
 WIDTH = 640
-HEIGHT = 240
+HEIGHT = 480
+BOARD_Y = 240
+BOARD_HEIGHT = 240
 
 VK_LEFT=37
 VK_UP=38
@@ -14,6 +16,9 @@ VK_L = 76
 VK_Z = 90
 
 keyState = {}
+
+randInt = (n) -> Math.floor(Math.random() * n)
+randArray = (arr) -> arr[randInt(arr.length)]
 
 class Point
   constructor: (@x, @y) ->
@@ -117,109 +122,6 @@ class Entity
     return (x2 <= x1 <= x2e) || (x2 <= x1e <= x2e) ||
         (x1 <= x2 <= x1e) || (x1 <= x2e <= x1e)
 
-class FreefallScript
-  constructor: (@badGuy) ->
-  nextDelta: -> new Point -1, 0
-  alive: -> true
-
-class GoToScript
-  constructor: (@badGuy, @goToPt) ->
-  nextDelta: ->
-    speed = 2
-    badGuyPt = new Point @badGuy.x, @badGuy.y
-    direction = @goToPt.sub badGuyPt
-    if direction.magnitude() < speed
-      return direction
-    direction.toUnit().scale(speed)
-
-  alive: ->
-    pt = new Point @badGuy.x, @badGuy.y
-    pt = @goToPt.sub pt
-    !pt.isEmpty()
-
-class CrashingBadGuy extends Entity
-  constructor: (x, y) ->
-    super x, y, 10, 10
-    @color = 'red'
-
-  alive: -> @y <= HEIGHT
-
-  tick: ->
-    @x--
-    @y++
-
-class BadGuy extends Entity
-  constructor: ->
-    super
-    @hp = 1
-    @target = null  # Set with a setter
-    @scripts = [new FreefallScript this]
-    @color = 'green'
-
-  tick: ->
-    super
-    return unless @target
-    if @scripts.length == 0
-      @x--
-    else
-      delta = @scripts[0].nextDelta()
-      @scripts.shift() if !@scripts[0].alive()
-      @x += delta.x
-      @y += delta.y
-
-  addScript: (script) ->
-    @scripts.unshift script
-
-  hitByBullet: (bullet) ->
-    return unless @alive()
-    @hp = 0
-    entities.add new CrashingBadGuy @x, @y
-  alive: -> @hp > 0
-
-class Shooter
-  constructor: (@cooldown) -> @left = 0
-  tick: -> @left-- if @left > 0
-  canShoot: -> @left == 0
-  shoot: ->
-    return false unless @canShoot()
-    @left = @cooldown
-    true
-
-entities = new Entities()
-
-class Bullet extends Entity
-  constructor: (x, y, @dx, @dy) ->
-    super x, y, 2, 2
-    @hit = false
-    @color = 'red'
-
-  tick: ->
-    super
-    @x += @dx
-    @y += @dy
-    for e in entities.getCollisionsFor this
-      if e.constructor == BadGuy
-        e.hitByBullet this
-        @hit = true
-
-  alive: -> @x < WIDTH && !@hit
-
-class Player extends Entity
-  constructor: ->
-    super
-    @shooter = new Shooter 10
-    @color = 'red'
-
-  tick: ->
-    super()
-    @shooter.tick()
-    delta = controller.offset().toUnit().scale(2)
-    @x += delta.x
-    @y += delta.y
-    if controller.shoot()
-      if @shooter.shoot()
-        entities.add new Bullet @x + @width, @y + @height / 2 - 1, 4, 0
-
 class LoopingTimer
   constructor: (@duration) ->
     @left = @duration
@@ -240,16 +142,6 @@ class Generator extends Entity
   tick: ->
     if @timer.tick()
       @fn()
-
-player = new Player 20, (HEIGHT - 10) / 2, 10, 10
-entities.add player
-entities.add new Generator 60, ->
-  bg = new BadGuy WIDTH, randInt(HEIGHT - 10), 10, 10
-  bg.target = player
-  bg.addScript new GoToScript bg, new Point(WIDTH - 50, HEIGHT / 2)
-  bg.addScript new GoToScript bg, new Point(WIDTH - 50, HEIGHT / 2 - 30)
-  bg.addScript new GoToScript bg, new Point(WIDTH - 80, HEIGHT / 2 + 30)
-  entities.add bg
 
 class Particles
   constructor: ->
@@ -280,25 +172,198 @@ class Particle
     ctx.fillStyle = @color
     ctx.fillRect @x, @y, @size, 1
 
+class GameWindow
+  constructor: (@x, @y, @width, @height) ->
+    @entities = new Entities
+  draw: (ctx, percent) ->
+  add: (entity) -> @entities.add entity
+  tick: -> @entities.tick()
+
+class Shooter
+  constructor: (@cooldown) -> @left = 0
+  tick: -> @left-- if @left > 0
+  canShoot: -> @left == 0
+  shoot: ->
+    return false unless @canShoot()
+    @left = @cooldown
+    true
+
+class Player extends Entity
+  constructor: ->
+    super
+    @shooter = new Shooter 10
+    @color = 'red'
+
+  tick: ->
+    super()
+    @shooter.tick()
+    delta = controller.offset().toUnit().scale(2)
+    @x += delta.x
+    @y += delta.y
+    if controller.shoot()
+      if @shooter.shoot()
+        b = new Bullet @x + @width, @y + @height / 2 - 1, 4, 0
+        starsWindow.entities.add b
+
+class StarsWindow extends GameWindow
+  constructor: ->
+    super 0, 0, WIDTH, HEIGHT/2
+    @particles = new Particles
+    for x in [0..@width]
+      @particles.add @generateParticle(x, 2)
+
+    for x in [0..Math.floor(@width/2)]
+      @particles.add @generateParticle(x * 2, 3, '#aaa')
+
+    @init()
+
+  generateParticle: (x, speed=1, color='#ddd') ->
+    y = randInt @height
+    size = 1
+    new Particle x, y, color, speed, size
+
+  draw: (ctx, percent) ->
+    ctx.fillStyle = 'black'
+    ctx.fillRect @x, @y, @width, @height
+    @particles.draw ctx
+    starsWindow.entities.draw ctx, percent
+
+  addNewParticles: ->
+    @particles.add @generateParticle(@width, 2)
+    @particles.add @generateParticle(@width, 3, '#aaa')
+    if @particles.size() < @width
+      @particles.add @generateParticle(@width, 2)
+
+  tick: ->
+    super
+    @particles.tick()
+
+  init: ->
+    player = new Player 20, (@height - 10) / 2, 10, 10
+    @entities.add player
+    @entities.add new Generator 60, =>
+      bg = new BadGuy @width, randInt(@height - 10), 10, 10
+      bg.color = randArray ['green', 'gray', 'blue', 'cyan']
+      bg.target = player
+      bg.addScript new GoToScript bg, new Point(@width - 50, @height / 2)
+      bg.addScript new GoToScript bg, new Point(@width - 50, @height / 2 - 30)
+      bg.addScript new GoToScript bg, new Point(@width - 80, @height / 2 + 30)
+      @entities.add bg
+
+class PuzzleWindow extends GameWindow
+  TILE_WIDTH = 16
+  TILE_HEIGHT = 16
+
+  constructor: ->
+    super 0, 240, WIDTH, 240
+    @tilesWide = 8
+    @tilesHigh = 10
+    @colors = []
+
+  addPiece: (color) ->
+    console.log 'color = ', color
+    @colors.push color
+
+  draw: (ctx, percent) ->
+    ctx.fillStyle = 'orange'
+    ctx.fillRect @x, @y, @width, @height
+    ctx.strokeStyle = 'white'
+    towerWidth = @tilesWide * TILE_WIDTH
+    towerX = @x + (@width - towerWidth) / 2
+    for y in [0...@tilesHigh]
+      for x in [0...@tilesWide]
+        colorI = x + y * @tilesWide
+        px = towerX + x * TILE_WIDTH
+        py = @y + @height - (y + 1) * TILE_HEIGHT
+        if colorI < @colors.length
+          ctx.fillStyle = @colors[colorI]
+          ctx.fillRect px, py, TILE_WIDTH, TILE_HEIGHT
+        ctx.strokeRect px, py, TILE_WIDTH, TILE_HEIGHT
+
+starsWindow = new StarsWindow
+puzzleWindow = new PuzzleWindow
+
+class FreefallScript
+  constructor: (@badGuy) ->
+  nextDelta: -> new Point -1, 0
+  alive: -> true
+
+class GoToScript
+  constructor: (@badGuy, @goToPt) ->
+  nextDelta: ->
+    speed = 2
+    badGuyPt = new Point @badGuy.x, @badGuy.y
+    direction = @goToPt.sub badGuyPt
+    if direction.magnitude() < speed
+      return direction
+    direction.toUnit().scale(speed)
+
+  alive: ->
+    pt = new Point @badGuy.x, @badGuy.y
+    pt = @goToPt.sub pt
+    !pt.isEmpty()
+
+class CrashingBadGuy extends Entity
+  constructor: (x, y, @color) ->
+    super x, y, 10, 10
+
+  alive: -> @y <= starsWindow.height
+
+  tick: ->
+    @x--
+    @y++
+    if !@alive()
+      puzzleWindow.addPiece @color
+
+class BadGuy extends Entity
+  constructor: ->
+    super
+    @hp = 1
+    @target = null  # Set with a setter
+    @scripts = [new FreefallScript this]
+    @color = 'green'
+
+  tick: ->
+    super
+    return unless @target
+    if @scripts.length == 0
+      @x--
+    else
+      delta = @scripts[0].nextDelta()
+      @scripts.shift() if !@scripts[0].alive()
+      @x += delta.x
+      @y += delta.y
+
+  addScript: (script) ->
+    @scripts.unshift script
+
+  hitByBullet: (bullet) ->
+    return unless @alive()
+    @hp = 0
+    starsWindow.entities.add new CrashingBadGuy @x, @y, @color
+  alive: -> @hp > 0
+
+class Bullet extends Entity
+  constructor: (x, y, @dx, @dy) ->
+    super x, y, 2, 2
+    @hit = false
+    @color = 'red'
+
+  tick: ->
+    super
+    @x += @dx
+    @y += @dy
+    for e in starsWindow.entities.getCollisionsFor this
+      if e.constructor == BadGuy
+        e.hitByBullet this
+        @hit = true
+
+  alive: -> @x < WIDTH && !@hit
+
 canvas = document.getElementById 'c'
 ctx = canvas.getContext '2d'
 
-randInt = (n) -> Math.floor(Math.random() * n)
-randArray = (arr) -> arr[randInt(arr.length)]
-
 colors = ['red', 'green', 'blue']
-
-generateParticle = (x, speed=1, color='#ddd') ->
-  y = randInt HEIGHT
-  size = 1
-  new Particle x, y, color, speed, size
-
-ps = new Particles()
-for x in [0..WIDTH]
-  ps.add generateParticle(x, 2)
-
-for x in [0..Math.floor(WIDTH/2)]
-  ps.add generateParticle(x * 2, 3, '#aaa')
 
 now = -> new Date().getTime()
 lastTick = now()
@@ -312,19 +377,15 @@ draw = ->
   if timeNow - lastTick > 1000
     lastTick = timeNow - FPT
   while timeNow - lastTick >= FPT
-    entities.tick()
+    starsWindow.entities.tick()
     lastTick += FPT
   requestAnimationFrame draw
-  ctx.fillStyle = 'black'
-  ctx.fillRect 0, 0, WIDTH, HEIGHT
-  ps.tick()
-  ps.draw ctx
-  entities.draw ctx, (timeNow - lastTick) / FPT
+  percent = (timeNow - lastTick) / FPT
+  starsWindow.tick()
+  puzzleWindow.tick()
+  starsWindow.addNewParticles()
+  starsWindow.draw ctx, percent
+  puzzleWindow.draw ctx, percent
 
-  y = randInt HEIGHT
-  ps.add generateParticle(WIDTH, 2)
-  ps.add generateParticle(WIDTH, 3, '#aaa')
-  if ps.size() < WIDTH
-    ps.add generateParticle(WIDTH, 2)
 
 draw()
